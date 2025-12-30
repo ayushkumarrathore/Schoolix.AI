@@ -1,0 +1,5 @@
+{
+  "name": "Schoolix Security Portal",
+  "description": "A high-security verification interface for (SJVS) students to access class notes.",
+  "requestFramePermissions": []
+}
