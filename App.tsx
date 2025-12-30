@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Message } from './types';
 import { sendMessageToSecurity } from './services/geminiService';
-import { Send, ShieldCheck, User, Bot, Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { Send, ShieldCheck, User, Bot, Loader2, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 
 // --- CONFIGURATION ---
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwD662zsplOvQtQ_XIJOTw8XdhmeVjo6l6jUyEgJi5L4D_Av0Rdr-p_IBWHq66cFzfH4g/exec";
@@ -11,13 +11,14 @@ const App: React.FC = () => {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'bot',
-      text: "Hello! 👋 Welcome to the Schoolix Student Portal. I am here to verify your identity and provide you with the password for the Class 9 notes.\nTo get started, please tell me your Full Name",
+      text: "Hello there! ✨ Welcome to the Schoolix Student Portal. I'm here to help you securely access the Class 9 notes. \n\nTo get started with our quick verification, could you kindly tell me your Full Name?",
       timestamp: new Date(),
     },
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
+  const [failedAttempts, setFailedAttempts] = useState(0);
   
   // States to capture data for Google Sheets
   const [studentData, setStudentData] = useState({
@@ -87,13 +88,41 @@ const App: React.FC = () => {
       timestamp: new Date(),
     };
 
+    // 1. Anti-Rubbish Name Filter (First user message)
+    const userMessageCount = messages.filter(m => m.role === 'user').length;
+    if (userMessageCount === 0) {
+      const nameRegex = /^[a-zA-Z\s]+$/;
+      if (!nameRegex.test(inputValue)) {
+        setMessages(prev => [...prev, userMsg, {
+          role: 'bot',
+          text: "That does not look like a valid name. Please enter your real Full Name (Letters only).",
+          timestamp: new Date()
+        }]);
+        setInputValue('');
+        return;
+      }
+    }
+
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     setInputValue('');
     setIsLoading(true);
 
-    const botResponseText = await sendMessageToSecurity(newMessages);
+    let botResponseText = await sendMessageToSecurity(newMessages);
     
+    // 2. 2-Strike Failure Rule Logic
+    if (botResponseText.includes('🚫 Verification Failed')) {
+      const newAttemptCount = failedAttempts + 1;
+      setFailedAttempts(newAttemptCount);
+
+      if (newAttemptCount < 2) {
+        botResponseText = "❌ Incorrect details. Please check your school ID card and try again. (Attempt 1/2)";
+      } else {
+        botResponseText = "🚫 Verification Failed. Maximum attempts reached. Access Denied.";
+        setIsLocked(true);
+      }
+    }
+
     const botMsg: Message = {
       role: 'bot',
       text: botResponseText,
@@ -103,25 +132,23 @@ const App: React.FC = () => {
     setMessages(prev => [...prev, botMsg]);
     setIsLoading(false);
 
-    // Watch for success phrase to trigger backend save
+    // Success Logic
     if (botResponseText.includes('✅ Verification Successful')) {
       setIsLocked(true);
       
-      const userMessages = newMessages.filter(m => m.role === 'user');
-      // Map correctly based on conversation sequence (index 0=name, 2=admin, 3=roll, 4=reason)
-      const finalName = studentData.name || userMessages[0]?.text || '';
-      const finalAdminNo = userMessages[2]?.text || studentData.admissionNo || '';
-      const finalRollNo = userMessages[3]?.text || studentData.rollNo || '';
-      const finalReason = userMessages[4]?.text || studentData.reason || '';
+      const userMessages = [...newMessages];
+      const finalUserMsgs = userMessages.filter(m => m.role === 'user');
+      
+      const finalName = finalUserMsgs[0]?.text || '';
+      const finalAdminNo = finalUserMsgs[2]?.text || '';
+      const finalRollNo = finalUserMsgs[3]?.text || '';
+      const finalReason = finalUserMsgs[4]?.text || '';
       
       sendToGoogleSheet(finalName, finalAdminNo, finalRollNo, finalReason);
     }
-
-    // Watch for fail phrase to lock input
-    if (botResponseText.includes('🚫 Verification Failed')) {
-      setIsLocked(true);
-    }
   };
+
+  const isFailedAccess = messages.some(m => m.text.includes('Maximum attempts reached'));
 
   return (
     <div className="min-h-screen bg-[#030712] flex flex-col items-center justify-center p-0 sm:p-4 text-slate-200 font-['Plus_Jakarta_Sans']">
@@ -143,6 +170,12 @@ const App: React.FC = () => {
               </div>
             </div>
           </div>
+          {failedAttempts > 0 && !isLocked && (
+            <div className="flex items-center gap-2 px-3 py-1 bg-amber-500/10 border border-amber-500/20 rounded-full">
+              <AlertTriangle className="w-3 h-3 text-amber-500" />
+              <span className="text-[10px] text-amber-500 font-bold">1/2 Strikes</span>
+            </div>
+          )}
         </div>
 
         {/* Chat Area */}
@@ -158,7 +191,9 @@ const App: React.FC = () => {
                 <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-lg ${
                   msg.role === 'user' 
                   ? 'bg-purple-600 text-white rounded-br-none' 
-                  : 'bg-slate-800 text-slate-200 rounded-bl-none border border-slate-700'
+                  : (msg.text.includes('Incorrect details') || msg.text.includes('Failed')) 
+                    ? 'bg-red-500/10 text-red-200 border border-red-500/20 rounded-bl-none'
+                    : 'bg-slate-800 text-slate-200 rounded-bl-none border border-slate-700'
                 }`}>
                   <div className="whitespace-pre-wrap font-medium">{msg.text}</div>
                   <div className={`text-[9px] mt-1.5 font-bold uppercase tracking-tighter opacity-40 ${msg.role === 'user' ? 'text-right' : ''}`}>
@@ -190,11 +225,11 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {isLocked && messages.some(m => m.text.includes('Failed')) && (
+          {isLocked && isFailedAccess && (
             <div className="mx-auto w-full max-w-sm p-5 bg-red-500/10 border border-red-500/20 rounded-2xl text-center space-y-2 animate-in zoom-in duration-500">
               <XCircle className="w-10 h-10 text-red-500 mx-auto" />
-              <h3 className="text-red-500 font-bold text-sm tracking-widest uppercase">Verification Failed</h3>
-              <p className="text-red-500/70 text-xs font-medium">Unfortunately, verification requirements were not met.</p>
+              <h3 className="text-red-500 font-bold text-sm tracking-widest uppercase">Access Denied</h3>
+              <p className="text-red-500/70 text-xs font-medium">Too many incorrect attempts. Please contact the administrator.</p>
             </div>
           )}
           
