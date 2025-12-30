@@ -227,7 +227,7 @@ const App: React.FC = () => {
           </div>
           <div className="mt-4 flex flex-col items-center gap-1">
             <p className="text-center text-[9px] text-slate-500 font-black uppercase tracking-[0.25em]">
-              St. John Vianney School | Portal
+              SCHOOLIX VERIFICATION | Portal
             </p>
             <div className="w-12 h-0.5 bg-slate-800 rounded-full mt-2" />
           </div>
