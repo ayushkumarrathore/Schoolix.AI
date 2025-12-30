@@ -1,275 +1,203 @@
-
 import React, { useState, useRef, useEffect } from 'react';
-import { Message } from './types';
-import { sendMessageToSecurity } from './services/geminiService';
-import { Send, ShieldCheck, User, Bot, Loader2, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { Send, Shield, Loader2, CheckCircle } from 'lucide-react';
 
 // --- CONFIGURATION ---
+// ⚠️ MAKE SURE THIS IS YOUR CORRECT GOOGLE SCRIPT URL
 const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwD662zsplOvQtQ_XIJOTw8XdhmeVjo6l6jUyEgJi5L4D_Av0Rdr-p_IBWHq66cFzfH4g/exec";
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
-const App: React.FC = () => {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      role: 'bot',
-      text: "Hello there! ✨ Welcome to the Schoolix Student Portal. I'm here to help you securely access the Class 9 notes. \n\nTo get started with our quick verification, could you kindly tell me your Full Name?",
-      timestamp: new Date(),
-    },
+// --- THE SMART BRAIN (System Instructions) ---
+const SYSTEM_INSTRUCTION = `
+You are the intelligent "Security Officer" for St. John Vianney School (Class 9 Portal).
+Your goal is to verify students efficiently but politely.
+
+**YOUR KNOWLEDGE BASE:**
+1. **Valid Roll Numbers:** 9201 to 9260.
+2. **Valid Admission Numbers:** Must be exactly 4 digits.
+3. **Password to Release:** sjvs@ix@
+
+**CONVERSATION RULES (BE SMART):**
+1. **Rubbish/Gibberish:** If the user types random letters (e.g., "hjsdf", "lol"), DO NOT count it as a "Wrong Answer" immediately. Instead, say: "I didn't catch that. Please enter a valid [Name/Number]."
+2. **"I Don't Know":** If the user says "I forgot" or "I don't know my admission number", DO NOT fail them. Politely say: "I cannot verify you without that detail. Please check your School ID card and type it here when you are ready."
+3. **Profanity:** If they use bad language, warn them professionally.
+4. **Wrong Details:** If they give a number outside the range (e.g. Roll 9300), tell them it is invalid for Class 9 and ask them to check again.
+5. **3-Strike Rule:** If they provide *incorrect* numbers (not just rubbish, but actual wrong numbers) 3 times in a row, then say "Verification Failed. Access Denied." and stop.
+
+**THE VERIFICATION FLOW:**
+- Ask for **Full Name** -> **Class** -> **Admission No** -> **Roll No**.
+- You can ask follow-up questions if their answer is unclear.
+
+**SUCCESS TRIGGER (CRITICAL):**
+ONLY when you are 100% satisfied, append this HIDDEN JSON block at the end of your message:
+|||JSON_START|||
+{ "VERIFIED": true, "name": "User Actual Name", "roll": "User Roll", "admin": "User Admin" }
+|||JSON_END|||
+`;
+
+function App() {
+  const [messages, setMessages] = useState([
+    { text: "Hello! 👋 Welcome to the Schoolix Portal.\n\nI need to verify your identity to give you the password. Let's start with your **Full Name**.", sender: 'bot' }
   ]);
-  const [inputValue, setInputValue] = useState('');
+  const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [isLocked, setIsLocked] = useState(false);
-  const [failedAttempts, setFailedAttempts] = useState(0);
-  
-  // States to capture data for Google Sheets
-  const [studentData, setStudentData] = useState({
-    name: '',
-    classSection: '',
-    admissionNo: '',
-    rollNo: '',
-    reason: ''
-  });
+  const [isVerified, setIsVerified] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [chatHistory, setChatHistory] = useState([]);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
-  // Handle data extraction from the flow
-  useEffect(() => {
-    const userMessages = messages.filter(m => m.role === 'user');
-    const lastUserMsg = userMessages[userMessages.length - 1];
-    
-    if (lastUserMsg) {
-      const index = userMessages.length - 1;
-      setStudentData(prev => {
-        const next = { ...prev };
-        if (index === 0) next.name = lastUserMsg.text;
-        if (index === 1) next.classSection = lastUserMsg.text;
-        if (index === 2) next.admissionNo = lastUserMsg.text;
-        if (index === 3) next.rollNo = lastUserMsg.text;
-        if (index === 4) next.reason = lastUserMsg.text;
-        return next;
-      });
-    }
-  }, [messages]);
-
-  const sendToGoogleSheet = async (name: string, adminNo: string, rollNo: string, reason: string) => {
-    try {
-      const data = {
-        name: name,
-        adminNo: adminNo,
-        roll: rollNo,
-        reason: reason
-      };
-
-      await fetch(GOOGLE_SCRIPT_URL, {
-        method: "POST",
-        mode: "no-cors",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data)
-      });
-      console.log("Verification data successfully dispatched to Google Sheets.");
-    } catch (error) {
-      console.error("Error logging to Google Sheets:", error);
-    }
-  };
-
   const handleSend = async () => {
-    if (!inputValue.trim() || isLoading || isLocked) return;
+    if (!input.trim() || isLoading || isVerified) return;
 
-    const userMsg: Message = {
-      role: 'user',
-      text: inputValue,
-      timestamp: new Date(),
-    };
-
-    // 1. Anti-Rubbish Name Filter (First user message)
-    const userMessageCount = messages.filter(m => m.role === 'user').length;
-    if (userMessageCount === 0) {
-      const nameRegex = /^[a-zA-Z\s]+$/;
-      if (!nameRegex.test(inputValue)) {
-        setMessages(prev => [...prev, userMsg, {
-          role: 'bot',
-          text: "That does not look like a valid name. Please enter your real Full Name (Letters only).",
-          timestamp: new Date()
-        }]);
-        setInputValue('');
-        return;
-      }
-    }
-
-    const newMessages = [...messages, userMsg];
-    setMessages(newMessages);
-    setInputValue('');
+    const userMessage = input.trim();
+    setInput("");
+    
+    // UI Update
+    setMessages(prev => [...prev, { text: userMessage, sender: 'user' }]);
     setIsLoading(true);
 
-    let botResponseText = await sendMessageToSecurity(newMessages);
-    
-    // 2. 2-Strike Failure Rule Logic
-    if (botResponseText.includes('🚫 Verification Failed')) {
-      const newAttemptCount = failedAttempts + 1;
-      setFailedAttempts(newAttemptCount);
+    try {
+      const genAI = new GoogleGenerativeAI(API_KEY);
+      const model = genAI.getGenerativeModel({ 
+        model: "gemini-1.5-flash",
+        systemInstruction: SYSTEM_INSTRUCTION 
+      });
 
-      if (newAttemptCount < 2) {
-        botResponseText = "❌ Incorrect details. Please check your school ID card and try again. (Attempt 1/2)";
-      } else {
-        botResponseText = "🚫 Verification Failed. Maximum attempts reached. Access Denied.";
-        setIsLocked(true);
+      const chat = model.startChat({ history: chatHistory });
+      const result = await chat.sendMessage(userMessage);
+      const rawResponse = result.response.text();
+
+      // Check for Hidden JSON
+      const jsonMatch = rawResponse.match(/\|\|\|JSON_START\|\|\|([\s\S]*?)\|\|\|JSON_END\|\|\|/);
+      
+      let botDisplayMessage = rawResponse;
+      
+      if (jsonMatch) {
+        // Hide JSON from user
+        botDisplayMessage = rawResponse.replace(jsonMatch[0], "").trim();
+        try {
+          const data = JSON.parse(jsonMatch[1]);
+          if (data.VERIFIED) handleVerificationSuccess(data);
+        } catch (e) {
+          console.error("JSON Error", e);
+        }
       }
+
+      setMessages(prev => [...prev, { text: botDisplayMessage, sender: 'bot' }]);
+      setChatHistory(prev => [
+        ...prev,
+        { role: "user", parts: [{ text: userMessage }] },
+        { role: "model", parts: [{ text: rawResponse }] }
+      ]);
+
+    } catch (error) {
+      console.error("AI Error:", error);
+      setMessages(prev => [...prev, { text: "⚠️ Connection Error. Please try again.", sender: 'bot' }]);
     }
-
-    const botMsg: Message = {
-      role: 'bot',
-      text: botResponseText,
-      timestamp: new Date(),
-    };
-
-    setMessages(prev => [...prev, botMsg]);
     setIsLoading(false);
-
-    // Success Logic
-    if (botResponseText.includes('✅ Verification Successful')) {
-      setIsLocked(true);
-      
-      const userMessages = [...newMessages];
-      const finalUserMsgs = userMessages.filter(m => m.role === 'user');
-      
-      const finalName = finalUserMsgs[0]?.text || '';
-      const finalAdminNo = finalUserMsgs[2]?.text || '';
-      const finalRollNo = finalUserMsgs[3]?.text || '';
-      const finalReason = finalUserMsgs[4]?.text || '';
-      
-      sendToGoogleSheet(finalName, finalAdminNo, finalRollNo, finalReason);
-    }
   };
 
-  const isFailedAccess = messages.some(m => m.text.includes('Maximum attempts reached'));
+  const handleVerificationSuccess = (data) => {
+    setIsVerified(true);
+    setShowPassword(true);
+
+    // Save to Google Sheet
+    fetch(GOOGLE_SCRIPT_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: data.name,
+        roll: data.roll,
+        adminNo: data.admin,
+        status: "Verified by AI"
+      })
+    });
+  };
 
   return (
-    <div className="min-h-screen bg-[#030712] flex flex-col items-center justify-center p-0 sm:p-4 text-slate-200 font-['Plus_Jakarta_Sans']">
-      <div className="w-full max-w-lg bg-[#0f172a] sm:rounded-2xl shadow-2xl flex flex-col h-screen sm:h-[85vh] overflow-hidden border border-slate-800">
-        
-        {/* Messenger Header */}
-        <div className="bg-[#1e293b]/90 backdrop-blur-sm px-6 py-5 flex items-center justify-between border-b border-slate-800">
-          <div className="flex items-center gap-4">
-            <div className="w-11 h-11 rounded-full bg-purple-600/10 flex items-center justify-center border border-purple-500/20 shadow-inner">
-              <ShieldCheck className="w-6 h-6 text-purple-500" />
-            </div>
-            <div>
-              <h1 className="text-white font-bold text-lg tracking-tight">Schoolix Assistant</h1>
-              <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${isLocked ? 'bg-red-500' : 'bg-green-500 animate-pulse'}`} />
-                <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
-                  {isLocked ? 'Session Closed' : 'Security Active'}
-                </span>
-              </div>
-            </div>
-          </div>
-          {failedAttempts > 0 && !isLocked && (
-            <div className="flex items-center gap-2 px-3 py-1 bg-amber-500/10 border border-amber-500/20 rounded-full">
-              <AlertTriangle className="w-3 h-3 text-amber-500" />
-              <span className="text-[10px] text-amber-500 font-bold">1/2 Strikes</span>
-            </div>
-          )}
+    <div className="flex flex-col h-screen bg-[#030712] text-white font-sans overflow-hidden relative">
+      {/* Background Blobs */}
+      <div className="absolute top-[-10%] left-[-10%] w-96 h-96 bg-indigo-600 rounded-full blur-[100px] opacity-20"></div>
+      <div className="absolute bottom-[-10%] right-[-10%] w-80 h-80 bg-pink-600 rounded-full blur-[100px] opacity-20"></div>
+
+      {/* HEADER */}
+      <div className="p-4 bg-gray-900/50 backdrop-blur-md border-b border-gray-800 flex items-center gap-3 z-10">
+        <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center">
+          <Shield className="w-6 h-6 text-white" />
         </div>
-
-        {/* Chat Area */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 custom-scrollbar bg-[#030712]/40">
-          {messages.map((msg, idx) => (
-            <div key={idx} className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2 duration-300`}>
-              <div className={`flex items-end gap-3 max-w-[85%] ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                <div className={`w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center shadow-md ${
-                  msg.role === 'user' ? 'bg-purple-600' : 'bg-slate-800 border border-slate-700'
-                }`}>
-                  {msg.role === 'user' ? <User className="w-4 h-4 text-white" /> : <Bot className="w-4 h-4 text-slate-300" />}
-                </div>
-                <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-lg ${
-                  msg.role === 'user' 
-                  ? 'bg-purple-600 text-white rounded-br-none' 
-                  : (msg.text.includes('Incorrect details') || msg.text.includes('Failed')) 
-                    ? 'bg-red-500/10 text-red-200 border border-red-500/20 rounded-bl-none'
-                    : 'bg-slate-800 text-slate-200 rounded-bl-none border border-slate-700'
-                }`}>
-                  <div className="whitespace-pre-wrap font-medium">{msg.text}</div>
-                  <div className={`text-[9px] mt-1.5 font-bold uppercase tracking-tighter opacity-40 ${msg.role === 'user' ? 'text-right' : ''}`}>
-                    {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-          
-          {isLoading && (
-            <div className="flex justify-start animate-pulse">
-              <div className="bg-slate-800/50 px-5 py-3 rounded-2xl rounded-bl-none border border-slate-700 flex items-center gap-3">
-                <div className="flex gap-1">
-                  <span className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
-                  <span className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
-                  <span className="w-1.5 h-1.5 bg-purple-500 rounded-full animate-bounce"></span>
-                </div>
-                <span className="text-xs text-slate-400 font-bold uppercase tracking-widest">Verifying...</span>
-              </div>
-            </div>
-          )}
-          
-          {isLocked && messages.some(m => m.text.includes('Successful')) && (
-            <div className="mx-auto w-full max-w-sm p-5 bg-green-500/10 border border-green-500/20 rounded-2xl text-center space-y-2 animate-in zoom-in duration-500">
-              <CheckCircle2 className="w-10 h-10 text-green-500 mx-auto" />
-              <h3 className="text-green-500 font-bold text-sm tracking-widest uppercase">Verification Success</h3>
-              <p className="text-green-500/70 text-xs">Your data has been securely recorded. You may proceed.</p>
-            </div>
-          )}
-
-          {isLocked && isFailedAccess && (
-            <div className="mx-auto w-full max-w-sm p-5 bg-red-500/10 border border-red-500/20 rounded-2xl text-center space-y-2 animate-in zoom-in duration-500">
-              <XCircle className="w-10 h-10 text-red-500 mx-auto" />
-              <h3 className="text-red-500 font-bold text-sm tracking-widest uppercase">Access Denied</h3>
-              <p className="text-red-500/70 text-xs font-medium">Too many incorrect attempts. Please contact the administrator.</p>
-            </div>
-          )}
-          
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Modern Input Bar */}
-        <div className="p-5 sm:p-8 bg-[#0f172a] border-t border-slate-800/50">
-          <div className={`relative flex items-center transition-all duration-500 ${isLocked ? 'opacity-20 pointer-events-none grayscale scale-95' : ''}`}>
-            <input
-              type="text"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-              placeholder={isLocked ? "Session finalized" : "Type your answer..."}
-              disabled={isLocked || isLoading}
-              className="w-full bg-slate-900 border border-slate-700/50 rounded-2xl py-5 pl-6 pr-16 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-4 focus:ring-purple-600/20 focus:border-purple-500/50 transition-all text-sm font-medium"
-            />
-            <button 
-              onClick={handleSend}
-              disabled={isLoading || !inputValue.trim() || isLocked}
-              className="absolute right-2.5 w-12 h-12 bg-purple-600 text-white rounded-xl flex items-center justify-center hover:bg-purple-500 hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:bg-slate-800 disabled:scale-100 shadow-lg shadow-purple-600/20"
-            >
-              {isLoading ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
-                <Send className="w-5 h-5" />
-              )}
-            </button>
-          </div>
-          <div className="mt-4 flex flex-col items-center gap-1">
-            <p className="text-center text-[9px] text-slate-500 font-black uppercase tracking-[0.25em]">
-              SCHOOLIX VERIFICATION | Portal
-            </p>
-            <div className="w-12 h-0.5 bg-slate-800 rounded-full mt-2" />
+        <div>
+          <h1 className="font-bold text-lg">Schoolix Assistant</h1>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+            <span className="text-xs text-gray-400">Online</span>
           </div>
         </div>
       </div>
+
+      {/* CHAT AREA */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 z-0">
+        {messages.map((msg, idx) => (
+          <div key={idx} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[85%] p-3.5 rounded-2xl shadow-md text-[15px] leading-relaxed whitespace-pre-wrap ${
+                msg.sender === 'user' 
+                  ? 'bg-[#8b5cf6] text-white rounded-tr-sm' 
+                  : 'bg-[#1f2937] text-gray-100 rounded-tl-sm border border-gray-700/50'
+              }`}>
+              {msg.text}
+            </div>
+          </div>
+        ))}
+        {isLoading && (
+          <div className="flex justify-start">
+            <div className="bg-[#1f2937] p-3 rounded-2xl rounded-tl-sm flex gap-2 items-center text-gray-400 text-sm">
+              <Loader2 className="w-4 h-4 animate-spin" /> Typing...
+            </div>
+          </div>
+        )}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* PASSWORD REVEAL */}
+      {showPassword && (
+        <div className="mx-4 mb-2 p-4 bg-green-900/20 border border-green-500/30 rounded-xl flex items-center justify-between animate-in slide-in-from-bottom-5">
+          <div className="flex items-center gap-3">
+            <CheckCircle className="w-8 h-8 text-green-400" />
+            <div>
+              <div className="text-xs text-green-300 font-semibold uppercase">Access Granted</div>
+              <div className="text-sm text-green-100">Password: <span className="font-mono font-bold text-white text-lg select-all">sjvs@ix@</span></div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* INPUT */}
+      <div className="p-4 bg-gray-900/80 backdrop-blur-md border-t border-gray-800 z-10">
+        <form onSubmit={(e) => { e.preventDefault(); handleSend(); }} className="flex gap-2 max-w-2xl mx-auto">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder={isVerified ? "Verification Complete." : "Type your answer..."}
+            disabled={isLoading || isVerified}
+            className="flex-1 bg-gray-800/50 border border-gray-700 text-white rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all"
+          />
+          <button type="submit" disabled={!input.trim() || isLoading || isVerified} className="bg-indigo-600 text-white p-3.5 rounded-xl hover:bg-indigo-500 disabled:opacity-50 transition-all">
+            <Send className="w-5 h-5" />
+          </button>
+        </form>
+      </div>
     </div>
   );
-};
+}
 
 export default App;
