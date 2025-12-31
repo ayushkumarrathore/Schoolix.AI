@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { marked } from 'marked';
+// REMOVED: import { marked } from 'marked'; 
 import { Message } from './types';
 import { sendMessageToSecurity, sendMessageToAssistant } from './services/geminiService';
 import { 
@@ -68,7 +68,7 @@ const App: React.FC = () => {
     try {
       const userMsgs = finalMessages.filter(m => m.role === 'user');
       const data = {
-        name: userMsgs[1]?.text || '', // First user message was choice, second is name
+        name: userMsgs[1]?.text || '', 
         adminNo: userMsgs[3]?.text || '',
         roll: userMsgs[4]?.text || '',
         reason: userMsgs[5]?.text || ''
@@ -89,7 +89,6 @@ const App: React.FC = () => {
     const textToSend = forcedValue || inputValue;
     if (!textToSend.trim() || isLoading) return;
 
-    // Restart logic
     if (textToSend.toLowerCase().trim() === 'restart') {
       resetApp();
       return;
@@ -113,7 +112,6 @@ const App: React.FC = () => {
     try {
       let botResponseText = "";
       
-      // Handle Initial Mode Selection
       if (appMode === 'CHOICE') {
         const lowerText = textToSend.toLowerCase();
         if (lowerText.includes('registration') || lowerText === '1') {
@@ -126,7 +124,6 @@ const App: React.FC = () => {
           botResponseText = "Invalid selection. Please type '1' for Registration or '2' for Helping Assistant.";
         }
       } 
-      // Handle Password Authentication for Assistant
       else if (appMode === 'AUTH') {
         if (textToSend === PORTAL_PASSWORD) {
           setAppMode('ASSISTANT');
@@ -135,11 +132,9 @@ const App: React.FC = () => {
           botResponseText = "❌ Incorrect password. Access denied. Please try again or go back to registration if you haven't signed up yet.";
         }
       }
-      // Handle Security Verification Flow
       else if (appMode === 'REGISTRATION') {
-        // Simple name filter for first actual registration message
         const regUserMsgs = newMessages.filter(m => m.role === 'user');
-        if (regUserMsgs.length === 2) { // 1st was choice, 2nd is name
+        if (regUserMsgs.length === 2) { 
            const nameRegex = /^[a-zA-Z\s]{3,50}$/; 
            if (!nameRegex.test(textToSend.trim())) {
              setIsLoading(false);
@@ -171,7 +166,6 @@ const App: React.FC = () => {
           sendToGoogleSheet(newMessages);
         }
       }
-      // Handle Assistant Interactions
       else if (appMode === 'ASSISTANT') {
         botResponseText = await sendMessageToAssistant(newMessages);
       }
@@ -196,9 +190,28 @@ const App: React.FC = () => {
 
   const isFailedAccess = messages.some(m => m.text.includes('Maximum security attempts reached'));
 
+  // --- NEW CUSTOM TEXT FORMATTER (No library needed) ---
   const renderMessageContent = (text: string) => {
-    const html = marked.parse(text);
-    return <div className="prose-chat" dangerouslySetInnerHTML={{ __html: html }} />;
+    // 1. Handle Newlines
+    const lines = text.split('\n');
+    return (
+      <div className="prose-chat">
+        {lines.map((line, i) => {
+          // 2. Simple Bold Formatting (**text**)
+          const parts = line.split(/(\*\*.*?\*\*)/g);
+          return (
+            <p key={i} className="min-h-[1em] mb-1 last:mb-0">
+              {parts.map((part, j) => {
+                if (part.startsWith('**') && part.endsWith('**')) {
+                  return <strong key={j} className="text-white font-bold">{part.slice(2, -2)}</strong>;
+                }
+                return part;
+              })}
+            </p>
+          );
+        })}
+      </div>
+    );
   };
 
   return (
@@ -292,6 +305,7 @@ const App: React.FC = () => {
                         : 'bg-slate-800 text-slate-200 rounded-bl-none border border-slate-700'
                 }`}>
                   <div className="font-medium">
+                    {/* USED NEW FUNCTION HERE */}
                     {renderMessageContent(msg.text)}
                   </div>
                   
@@ -366,59 +380,4 @@ const App: React.FC = () => {
                 <RefreshCcw className="w-3 h-3" /> Retry Connection
               </button>
             </div>
-          )}
-
-          {isLocked && isFailedAccess && (
-            <div className="mx-auto w-full max-w-sm p-6 bg-red-500/10 border border-red-500/20 rounded-2xl text-center space-y-3 animate-in zoom-in duration-500">
-              <XCircle className="w-12 h-12 text-red-500 mx-auto" />
-              <div>
-                <h3 className="text-red-500 font-bold text-sm tracking-widest uppercase">Verification Locked</h3>
-                <p className="text-red-500/70 text-xs font-medium mt-1">Access denied permanently for this session. Type 'restart' to try again.</p>
-              </div>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Input Footer */}
-        <div className="p-5 sm:p-8 bg-[#0f172a] border-t border-slate-800/50">
-          <div className={`relative flex items-center transition-all duration-500 ${isLocked && appMode !== 'ASSISTANT' ? 'opacity-20 pointer-events-none grayscale scale-95' : ''}`}>
-            <input
-              type={appMode === 'AUTH' ? "password" : "text"}
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-              placeholder={
-                appMode === 'ASSISTANT' ? "Ask anything about studies or website..." : 
-                appMode === 'AUTH' ? "Enter Portal Password..." :
-                appMode === 'CHOICE' ? "Choose an option above..." :
-                "Type your response (or 'restart')..."
-              }
-              disabled={(isLocked && appMode !== 'ASSISTANT') || isLoading || appMode === 'CHOICE'}
-              className={`w-full bg-slate-900 border rounded-2xl py-5 pl-6 pr-16 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-4 transition-all text-sm font-medium ${appMode === 'ASSISTANT' ? 'border-indigo-500/30 focus:ring-indigo-600/20 focus:border-indigo-500/50' : 'border-slate-700/50 focus:ring-purple-600/20 focus:border-purple-500/50'}`}
-            />
-            <button 
-              onClick={() => handleSend()}
-              disabled={isLoading || (!inputValue.trim() && appMode !== 'CHOICE') || (isLocked && appMode !== 'ASSISTANT')}
-              className={`absolute right-2.5 w-12 h-12 text-white rounded-xl flex items-center justify-center hover:scale-105 active:scale-95 transition-all disabled:opacity-50 disabled:bg-slate-800 disabled:scale-100 shadow-lg ${appMode === 'ASSISTANT' ? 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-600/20' : 'bg-purple-600 hover:bg-purple-500 shadow-purple-600/20'}`}
-            >
-              {isLoading ? (
-                <Loader2 className="w-5 h-5 animate-spin" />
-              ) : (
-                <Send className="w-5 h-5" />
-              )}
-            </button>
-          </div>
-          <div className="mt-4 flex flex-col items-center gap-1">
-            <p className="text-center text-[9px] text-slate-500 font-black uppercase tracking-[0.25em]">
-              {appMode === 'ASSISTANT' ? 'Powered by Gemini 3 Pro' : 'Schoolix Portal Infrastructure V4.0'}
-            </p>
-            <div className={`w-12 h-0.5 rounded-full mt-2 transition-colors duration-500 ${appMode === 'ASSISTANT' ? 'bg-indigo-500' : 'bg-slate-800'}`} />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-export default App;
+        
