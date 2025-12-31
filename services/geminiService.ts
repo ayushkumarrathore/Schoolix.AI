@@ -42,7 +42,7 @@ CRITICAL SECURITY CONSTRAINTS:
 
 const ASSISTANT_SYSTEM_INSTRUCTION = `
 Role: Schoolix Helping Assistant & Website Guide.
-Intelligence Level: Gemini 3 Pro.
+Intelligence Level: High (Gemini 3 Flash).
 Goal: Provide academic support for Class 9 SJVS students AND help them navigate/use the Schoolix website ("Schoolix for Viannians").
 
 ACADEMIC SCOPE:
@@ -67,10 +67,8 @@ IDENTIFICATION:
 `;
 
 export async function sendMessageToSecurity(messages: Message[]): Promise<string> {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) return "Security module offline (Missing API Key).";
-
-  const ai = new GoogleGenAI({ apiKey });
+  // Always use process.env.API_KEY directly as per SDK guidelines
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const chatHistory = messages.map(msg => ({
     role: msg.role === 'bot' ? 'model' : 'user',
     parts: [{ text: msg.text }]
@@ -85,6 +83,7 @@ export async function sendMessageToSecurity(messages: Message[]): Promise<string
         temperature: 0.3,
       },
     });
+    // Accessing .text property directly as it is not a method
     return response.text?.trim() || "No response received.";
   } catch (error: any) {
     console.error("Security Module Error:", error);
@@ -93,29 +92,47 @@ export async function sendMessageToSecurity(messages: Message[]): Promise<string
 }
 
 export async function sendMessageToAssistant(messages: Message[]): Promise<string> {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) return "AI Assistant offline (Missing API Key).";
+  // Always use process.env.API_KEY directly as per SDK guidelines
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-  const ai = new GoogleGenAI({ apiKey });
+  // Find the point where the assistant conversation actually starts to avoid sending irrelevant registration history.
+  // Using a manual loop instead of findLastIndex to fix the TS error (lib compatibility).
+  let assistantStartIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].text.includes("✅ Password Accepted") || messages[i].text.includes("✅ Verification Successful")) {
+      assistantStartIndex = i;
+      break;
+    }
+  }
   
-  // Filter history to remove the initial choice messages and only focus on the academic chat
-  const chatHistory = messages.slice(-10).map(msg => ({
+  const relevantMessages = assistantStartIndex !== -1 ? messages.slice(assistantStartIndex + 1) : messages.slice(-10);
+
+  if (relevantMessages.length === 0) return "How can I help you today?";
+
+  const chatHistory = relevantMessages.map(msg => ({
     role: msg.role === 'bot' ? 'model' : 'user',
     parts: [{ text: msg.text }]
   }));
 
   try {
+    // Using ai.models.generateContent to process the conversation history with model-specific config
     const response = await ai.models.generateContent({
-      model: 'gemini-3-pro-preview',
+      model: 'gemini-3-flash-preview',
       contents: chatHistory,
       config: {
         systemInstruction: ASSISTANT_SYSTEM_INSTRUCTION,
         temperature: 0.7,
       },
     });
+
+    // Accessing .text property directly
     return response.text?.trim() || "I am unable to process that request right now.";
   } catch (error: any) {
-    console.error("Pro Assistant Error:", error);
-    return "The AI Intelligence module is currently busy. Please retry in a moment.";
+    console.error("Assistant API Error:", error);
+    // More helpful messaging for common API busy/limit states
+    if (error?.message?.includes('429') || error?.message?.includes('503')) {
+      return "The Schoolix Intelligence module is currently experiencing high traffic. Please wait a few seconds and try sending your message again.";
+    }
+    return "The assistant service is temporarily busy. Please check your connection and retry.";
   }
 }
