@@ -1,5 +1,4 @@
 
-// Fix: Use correct imports for HarmCategory and HarmBlockThreshold to resolve type errors
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import { Message } from "../types";
 
@@ -67,8 +66,6 @@ IDENTIFICATION:
 - State: "I am the Schoolix Helping Assistant. I'm here to help you with your Class 9 studies and guide you through the features of our website."
 `;
 
-// Shared safety settings to minimize blocking of academic content
-// Fix: Use HarmCategory and HarmBlockThreshold enums to fix type mismatch on line 114 and 152
 const safetySettings = [
   { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
   { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
@@ -80,18 +77,28 @@ const safetySettings = [
 /**
  * Generic retry wrapper with exponential backoff for Gemini API calls.
  */
-async function callWithRetry(fn: () => Promise<any>, maxRetries = 3): Promise<any> {
+async function callWithRetry(fn: () => Promise<any>, maxRetries = 4): Promise<any> {
   let lastError: any;
   for (let i = 0; i < maxRetries; i++) {
     try {
       return await fn();
     } catch (error: any) {
       lastError = error;
-      const isBusyError = error?.status === 429 || error?.status === 503 || error?.message?.includes('429') || error?.message?.includes('503');
+      const errorMsg = error?.message || "";
+      const status = error?.status || 0;
       
-      if (!isBusyError) throw error; // If not a "busy" error, fail immediately
+      // Retry on 429 (Rate Limit) or 503 (Service Unavailable)
+      const isRetryable = status === 429 || status === 503 || errorMsg.includes('429') || errorMsg.includes('503');
+      
+      if (!isRetryable) {
+        // If it's an Auth error, we shouldn't retry
+        if (status === 401 || status === 403 || errorMsg.includes('API_KEY_INVALID') || errorMsg.includes('API key not found')) {
+           throw new Error("AUTH_ERROR");
+        }
+        throw error;
+      }
 
-      const waitTime = Math.pow(2, i) * 1000;
+      const waitTime = Math.pow(2, i) * 1500; // Slightly longer wait
       console.warn(`Gemini API busy (attempt ${i + 1}/${maxRetries}). Retrying in ${waitTime}ms...`);
       await new Promise(resolve => setTimeout(resolve, waitTime));
     }
@@ -100,6 +107,8 @@ async function callWithRetry(fn: () => Promise<any>, maxRetries = 3): Promise<an
 }
 
 export async function sendMessageToSecurity(messages: Message[]): Promise<string> {
+  if (!process.env.API_KEY) return "Configuration Error: API Key missing in environment.";
+
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const chatHistory = messages.map(msg => ({
     role: msg.role === 'bot' ? 'model' : 'user',
@@ -107,7 +116,6 @@ export async function sendMessageToSecurity(messages: Message[]): Promise<string
   }));
 
   try {
-    // Fix: Corrected model name and applied fixed safetySettings
     const response = await callWithRetry(() => ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: chatHistory,
@@ -119,15 +127,17 @@ export async function sendMessageToSecurity(messages: Message[]): Promise<string
     }));
     return response.text?.trim() || "No response received.";
   } catch (error: any) {
+    if (error.message === "AUTH_ERROR") return "Security Error: Your school's API Key is invalid or expired. Please contact the administrator.";
     console.error("Security Module Error:", error);
-    return "Verification service is momentarily unresponsive. Please try again in a few seconds.";
+    return "Verification service is momentarily unresponsive. Please wait 5 seconds and try again.";
   }
 }
 
 export async function sendMessageToAssistant(messages: Message[]): Promise<string> {
+  if (!process.env.API_KEY) return "Assistant Configuration Error: API Key missing in environment.";
+
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-  // Find the assistant conversation start point
   let assistantStartIndex = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].text.includes("✅ Password Accepted") || messages[i].text.includes("✅ Verification Successful")) {
@@ -146,9 +156,9 @@ export async function sendMessageToAssistant(messages: Message[]): Promise<strin
   }));
 
   try {
-    // Fix: Updated to gemini-3-pro-preview for complex academic reasoning tasks as per guidelines
+    // Flash-preview is more stable for general use than Pro-preview in free/limited tiers
     const response = await callWithRetry(() => ai.models.generateContent({
-      model: 'gemini-3-pro-preview',
+      model: 'gemini-3-flash-preview',
       contents: chatHistory,
       config: {
         systemInstruction: ASSISTANT_SYSTEM_INSTRUCTION,
@@ -159,7 +169,8 @@ export async function sendMessageToAssistant(messages: Message[]): Promise<strin
 
     return response.text?.trim() || "I am unable to process that request right now.";
   } catch (error: any) {
+    if (error.message === "AUTH_ERROR") return "Authentication Error: The API Key configured in the portal is invalid. Check Vercel environment variables.";
     console.error("Assistant API Error:", error);
-    return "The Schoolix Intelligence module is currently under heavy load. Please wait a moment and try sending your message again.";
+    return "The Schoolix Intelligence module is receiving too many requests. Please wait 3-5 seconds and send your message again.";
   }
 }
