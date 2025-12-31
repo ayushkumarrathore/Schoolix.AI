@@ -1,5 +1,6 @@
 
-import { GoogleGenAI } from "@google/genai";
+// Fix: Use correct imports for HarmCategory and HarmBlockThreshold to resolve type errors
+import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from "@google/genai";
 import { Message } from "../types";
 
 const SECURITY_SYSTEM_INSTRUCTION = `
@@ -66,8 +67,39 @@ IDENTIFICATION:
 - State: "I am the Schoolix Helping Assistant. I'm here to help you with your Class 9 studies and guide you through the features of our website."
 `;
 
+// Shared safety settings to minimize blocking of academic content
+// Fix: Use HarmCategory and HarmBlockThreshold enums to fix type mismatch on line 114 and 152
+const safetySettings = [
+  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY, threshold: HarmBlockThreshold.BLOCK_NONE },
+];
+
+/**
+ * Generic retry wrapper with exponential backoff for Gemini API calls.
+ */
+async function callWithRetry(fn: () => Promise<any>, maxRetries = 3): Promise<any> {
+  let lastError: any;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      lastError = error;
+      const isBusyError = error?.status === 429 || error?.status === 503 || error?.message?.includes('429') || error?.message?.includes('503');
+      
+      if (!isBusyError) throw error; // If not a "busy" error, fail immediately
+
+      const waitTime = Math.pow(2, i) * 1000;
+      console.warn(`Gemini API busy (attempt ${i + 1}/${maxRetries}). Retrying in ${waitTime}ms...`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+  }
+  throw lastError;
+}
+
 export async function sendMessageToSecurity(messages: Message[]): Promise<string> {
-  // Always use process.env.API_KEY directly as per SDK guidelines
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const chatHistory = messages.map(msg => ({
     role: msg.role === 'bot' ? 'model' : 'user',
@@ -75,28 +107,27 @@ export async function sendMessageToSecurity(messages: Message[]): Promise<string
   }));
 
   try {
-    const response = await ai.models.generateContent({
+    // Fix: Corrected model name and applied fixed safetySettings
+    const response = await callWithRetry(() => ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: chatHistory,
       config: {
         systemInstruction: SECURITY_SYSTEM_INSTRUCTION,
         temperature: 0.3,
+        safetySettings,
       },
-    });
-    // Accessing .text property directly as it is not a method
+    }));
     return response.text?.trim() || "No response received.";
   } catch (error: any) {
     console.error("Security Module Error:", error);
-    return "Verification service is momentarily unresponsive.";
+    return "Verification service is momentarily unresponsive. Please try again in a few seconds.";
   }
 }
 
 export async function sendMessageToAssistant(messages: Message[]): Promise<string> {
-  // Always use process.env.API_KEY directly as per SDK guidelines
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-  // Find the point where the assistant conversation actually starts to avoid sending irrelevant registration history.
-  // Using a manual loop instead of findLastIndex to fix the TS error (lib compatibility).
+  // Find the assistant conversation start point
   let assistantStartIndex = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].text.includes("✅ Password Accepted") || messages[i].text.includes("✅ Verification Successful")) {
@@ -115,24 +146,20 @@ export async function sendMessageToAssistant(messages: Message[]): Promise<strin
   }));
 
   try {
-    // Using ai.models.generateContent to process the conversation history with model-specific config
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+    // Fix: Updated to gemini-3-pro-preview for complex academic reasoning tasks as per guidelines
+    const response = await callWithRetry(() => ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
       contents: chatHistory,
       config: {
         systemInstruction: ASSISTANT_SYSTEM_INSTRUCTION,
         temperature: 0.7,
+        safetySettings,
       },
-    });
+    }));
 
-    // Accessing .text property directly
     return response.text?.trim() || "I am unable to process that request right now.";
   } catch (error: any) {
     console.error("Assistant API Error:", error);
-    // More helpful messaging for common API busy/limit states
-    if (error?.message?.includes('429') || error?.message?.includes('503')) {
-      return "The Schoolix Intelligence module is currently experiencing high traffic. Please wait a few seconds and try sending your message again.";
-    }
-    return "The assistant service is temporarily busy. Please check your connection and retry.";
+    return "The Schoolix Intelligence module is currently under heavy load. Please wait a moment and try sending your message again.";
   }
 }
