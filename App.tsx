@@ -69,7 +69,7 @@ const App: React.FC = () => {
     try {
       const userMsgs = finalMessages.filter(m => m.role === 'user');
       const data = {
-        name: userMsgs[1]?.text || '', // First user message was choice, second is name
+        name: userMsgs[1]?.text || '', 
         adminNo: userMsgs[3]?.text || '',
         roll: userMsgs[4]?.text || '',
         reason: userMsgs[5]?.text || ''
@@ -90,7 +90,6 @@ const App: React.FC = () => {
     const textToSend = forcedValue || inputValue;
     if (!textToSend.trim() || isLoading) return;
 
-    // Restart logic
     if (textToSend.toLowerCase().trim() === 'restart') {
       resetApp();
       return;
@@ -114,7 +113,6 @@ const App: React.FC = () => {
     try {
       let botResponseText = "";
       
-      // Handle Initial Mode Selection
       if (appMode === 'CHOICE') {
         const lowerText = textToSend.toLowerCase();
         if (lowerText.includes('registration') || lowerText === '1') {
@@ -127,20 +125,17 @@ const App: React.FC = () => {
           botResponseText = "Invalid selection. Please type '1' for Registration or '2' for Helping Assistant.";
         }
       } 
-      // Handle Password Authentication for Assistant
       else if (appMode === 'AUTH') {
         if (textToSend === PORTAL_PASSWORD) {
           setAppMode('ASSISTANT');
-          botResponseText = "✅ Password Accepted. Access granted to the **Gemini 3 Pro Helping Assistant**. \n\nI can help you with your Class 9 studies or explain how to use the Schoolix website. How can I assist you today?";
+          botResponseText = "✅ Password Accepted. Access granted to the **Gemini Flash Helping Assistant**. \n\nI can help you with your Class 9 studies or explain how to use the Schoolix website. How can I assist you today?";
         } else {
           botResponseText = "❌ Incorrect password. Access denied. Please try again or go back to registration if you haven't signed up yet.";
         }
       }
-      // Handle Security Verification Flow
       else if (appMode === 'REGISTRATION') {
-        // Simple name filter for first actual registration message
         const regUserMsgs = newMessages.filter(m => m.role === 'user');
-        if (regUserMsgs.length === 2) { // 1st was choice, 2nd is name
+        if (regUserMsgs.length === 2) { 
            const nameRegex = /^[a-zA-Z\s]{3,50}$/; 
            if (!nameRegex.test(textToSend.trim())) {
              setIsLoading(false);
@@ -172,7 +167,6 @@ const App: React.FC = () => {
           sendToGoogleSheet(newMessages);
         }
       }
-      // Handle Assistant Interactions
       else if (appMode === 'ASSISTANT') {
         botResponseText = await sendMessageToAssistant(newMessages);
       }
@@ -187,7 +181,7 @@ const App: React.FC = () => {
       setIsError(true);
       setMessages(prev => [...prev, {
         role: 'bot',
-        text: "System encountered an error. Please check your connection.",
+        text: "System encountered an error. Please check your internet connection and try again.",
         timestamp: new Date()
       }]);
     } finally {
@@ -205,7 +199,6 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#030712] flex flex-col items-center justify-center p-0 sm:p-4 text-slate-200 font-['Plus_Jakarta_Sans'] relative overflow-hidden">
       
-      {/* Help Modal */}
       {showHelp && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-[#1e293b] border border-slate-700 w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
@@ -239,7 +232,6 @@ const App: React.FC = () => {
 
       <div className="w-full max-w-lg bg-[#0f172a] sm:rounded-2xl shadow-2xl flex flex-col h-screen sm:h-[85vh] overflow-hidden border border-slate-800 z-10 transition-all duration-700">
         
-        {/* Messenger Header */}
         <div className={`px-6 py-5 flex items-center justify-between border-b border-slate-800 transition-colors duration-500 ${appMode === 'ASSISTANT' ? 'bg-indigo-900/40 backdrop-blur-md' : 'bg-[#1e293b]/90 backdrop-blur-sm'}`}>
           <div className="flex items-center gap-4">
             <div className={`w-11 h-11 rounded-full flex items-center justify-center border shadow-inner transition-all duration-700 ${appMode === 'ASSISTANT' ? 'bg-indigo-500/20 border-indigo-500/40' : 'bg-purple-600/10 border-purple-500/20'}`}>
@@ -252,7 +244,7 @@ const App: React.FC = () => {
               <div className="flex items-center gap-2">
                 <span className={`w-2 h-2 rounded-full ${isLocked ? 'bg-red-500' : 'bg-green-500 animate-pulse'}`} />
                 <span className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">
-                  {appMode === 'ASSISTANT' ? 'Gemini Pro Enabled' : appMode === 'REGISTRATION' ? 'Registration In Progress' : isLocked ? 'Session Closed' : 'System Ready'}
+                  {appMode === 'ASSISTANT' ? 'Gemini Flash Active' : appMode === 'REGISTRATION' ? 'Registration In Progress' : isLocked ? 'Session Closed' : 'System Ready'}
                 </span>
               </div>
             </div>
@@ -264,16 +256,9 @@ const App: React.FC = () => {
             <button onClick={() => setShowHelp(true)} className="p-2 text-slate-400 hover:text-white hover:bg-slate-800/50 rounded-lg transition-all" title="Information">
               <HelpCircle className="w-5 h-5" />
             </button>
-            {failedAttempts === 1 && appMode === 'REGISTRATION' && (
-              <div className="flex items-center gap-2 px-3 py-1 bg-amber-500/10 border border-amber-500/20 rounded-full">
-                <AlertTriangle className="w-3 h-3 text-amber-500" />
-                <span className="text-[10px] text-amber-500 font-bold tracking-tighter uppercase">1/2</span>
-              </div>
-            )}
           </div>
         </div>
 
-        {/* Chat Area */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 custom-scrollbar bg-[#030712]/40 relative">
           {messages.map((msg, idx) => (
             <div key={idx} className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2 duration-300`}>
@@ -286,7 +271,7 @@ const App: React.FC = () => {
                 <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed shadow-lg relative group transition-all duration-500 ${
                   msg.role === 'user' 
                   ? 'bg-purple-600 text-white rounded-br-none' 
-                  : (msg.text.includes('🚫') || msg.text.includes('❌')) 
+                  : (msg.text.includes('🚫') || msg.text.includes('❌') || msg.text.includes('Error:')) 
                     ? 'bg-red-500/10 text-red-200 border border-red-500/20 rounded-bl-none'
                     : appMode === 'ASSISTANT'
                         ? 'bg-gradient-to-br from-indigo-900/40 to-slate-800 text-slate-100 rounded-bl-none border border-indigo-500/20'
@@ -381,7 +366,6 @@ const App: React.FC = () => {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input Footer */}
         <div className="p-5 sm:p-8 bg-[#0f172a] border-t border-slate-800/50">
           <div className={`relative flex items-center transition-all duration-500 ${isLocked && appMode !== 'ASSISTANT' ? 'opacity-20 pointer-events-none grayscale scale-95' : ''}`}>
             <input
@@ -412,7 +396,7 @@ const App: React.FC = () => {
           </div>
           <div className="mt-4 flex flex-col items-center gap-1">
             <p className="text-center text-[9px] text-slate-500 font-black uppercase tracking-[0.25em]">
-              {appMode === 'ASSISTANT' ? 'Powered by Gemini 3 Pro' : 'Schoolix Portal Infrastructure V4.0'}
+              {appMode === 'ASSISTANT' ? 'Powered by Gemini Flash' : 'Schoolix Portal Infrastructure V4.5'}
             </p>
             <div className={`w-12 h-0.5 rounded-full mt-2 transition-colors duration-500 ${appMode === 'ASSISTANT' ? 'bg-indigo-500' : 'bg-slate-800'}`} />
           </div>
