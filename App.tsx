@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import { marked } from 'marked';
 import { Message } from './types';
